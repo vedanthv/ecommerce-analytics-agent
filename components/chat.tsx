@@ -12,6 +12,21 @@ export default function Chat({ selectedChat }: any) {
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [chatTitle, setChatTitle] = useState<string>("New Chat");
 
+  // ✅ NEW: session id for Redis
+  const [sessionId, setSessionId] = useState<string>("");
+
+  // ================= INIT SESSION =================
+  useEffect(() => {
+    let id = localStorage.getItem("session_id");
+
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem("session_id", id);
+    }
+
+    setSessionId(id);
+  }, []);
+
   // ================= LOAD SELECTED CHAT =================
   useEffect(() => {
     if (selectedChat) {
@@ -55,7 +70,7 @@ export default function Chat({ selectedChat }: any) {
     window.dispatchEvent(new Event("chat_updated"));
   }, [messages, chatTitle]);
 
-  // ================= GENERATE TITLE (ONLY ON FIRST MESSAGE) =================
+  // ================= GENERATE TITLE =================
   const generateTitle = async (firstMessage: string) => {
     try {
       const res = await fetch("/api/generate-title", {
@@ -90,6 +105,7 @@ export default function Chat({ selectedChat }: any) {
       body: JSON.stringify({
         question,
         history: messages.slice(-6),
+        sessionId, // ✅ NEW (ONLY CHANGE)
       }),
     });
 

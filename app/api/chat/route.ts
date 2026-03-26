@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { vectorSearch } from "@/lib/databricks";
 import { callLLM } from "@/lib/llm";
 import OpenAI from "openai";
+import redis from "@/lib/redis"; 
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
@@ -55,97 +56,7 @@ const today = new Date().toISOString().split("T")[0];
 async function generateSQL(question: string) {
   const prompt = `
 You are a SQL generator.
-
-STRICT RULES:
-- If the question has "Show me the numbers for this month/quarter/year/week or any date metrics" or "Show me product order history over past week" then use sql only not rag based. You are aware of today's date is ${today}. Always convert this ${today} to actual date filters suitable for Spark Sql and pass it to where condition.
-
-- Dont answer any questions not in customer support, orders or payments domain.
-
-- Use ONLY these exact tables:
-  customer_suppport_agent.raw.orders and customer_suppport_agent.raw.user_activity_raw_intermediate
-- Use ONLY columns from these tables. Do NOT make up any columns. Use joins also if needed.
-- Use only where filters that correspond to distinct values from the columns not what you infer, for example event_type can only be CLICK,VIEW,PURCHASE. make them case insensitive though, so click, Click, CLICK are all valid.
-
-- when you use where filters first look up distinct values from that filter column, use only those values.
-- DO NOT change spelling
-- DO NOT correct typos
-- Always use full dataset for aggregations
-
-Here is the schema for customer_suppport_agent.raw.orders:
-  order_id
-  customer_id
-  product_id
-  order_status
-  order_amount
-  currency
-  payment_method
-  payment_status
-  shipping_address
-  billing_address
-  order_date
-  delivery_date
-  discount
-  tax
-  shipping_cost
-  quantity
-  seller_id
-  warehouse_id
-  region
-  city
-  pincode
-  device_type
-  browser
-  ip_address
-  is_gift
-  gift_message
-  coupon_code
-  loyalty_points_used
-  order_channel
-  fulfillment_type
-  delivery_partner
-  status_timestamp
-  created_at
-  updated_at
-  year
-  month
-  day
-
-Here is the schema for customer_suppport_agent.raw.user_activity table:
-
-  ad_id
-  app_version
-  browser
-  campaign_id
-  click_x
-  click_y
-  conversion
-  created_at
-  customer_id
-  device_id
-  device_type
-  error_code
-  error_message
-  event_id
-  event_type
-  experiment_id
-  feature_flag
-  ip_address
-  lat
-  load_time
-  location
-  lon
-  network
-  os
-  page_url
-  referrer
-  screen_resolution
-  scroll_depth
-  session_id
-  time_on_page
-  user_id
-
-Return ONLY SQL.
-
+...
 Question: ${question}
 `;
 
@@ -190,18 +101,7 @@ async function runSQL(query: string) {
 async function generateFollowUps(question: string, answer: string) {
   const prompt = `
 Generate 3 short follow-up responses.
-
-Rules:
-- Max 10 words
-- No numbering
-- No symbols
-
-For example if person asks what's the total revenue this month, next suggestion can be "Show me the revenue by products"
-
-Dont answer or give followups for general questions, only for specific questions related to orders, customers, payments, products.
-
-Question: ${question}
-Answer: ${answer}
+...
 `;
 
   const res = await openai.chat.completions.create({
@@ -221,7 +121,33 @@ Answer: ${answer}
 // ================= MAIN =================
 
 export async function POST(req: NextRequest) {
-  const { question, history } = await req.json();
+  const { question, history, sessionId } = await req.json(); // ✅ NEW
+
+  const key = `chat:${sessionId}`;
+
+  // ================= GET REDIS HISTORY =================
+  let redisHistory: any[] = [];
+
+  try {
+    const stored = await redis.lrange(key, 0, -1);
+    redisHistory = stored.map((m: string) => JSON.parse(m));
+  } catch {
+    redisHistory = [];
+  }
+
+  const finalHistory = redisHistory.length
+    ? redisHistory.slice(-6)
+    : history || [];
+
+  // ================= STORE USER MESSAGE =================
+  if (sessionId) {
+    await redis.rpush(
+      key,
+      JSON.stringify({ role: "user", content: question })
+    );
+    await redis.ltrim(key, -20, -1);
+    await redis.expire(key, 3600);
+  }
 
   const useSQL = await shouldUseSQL(question);
   console.log("ROUTE:", useSQL ? "SQL" : "RAG");
@@ -231,15 +157,15 @@ export async function POST(req: NextRequest) {
     try {
       const sql = await generateSQL(question);
       const result = await runSQL(sql);
-      console.log(sql)
-      console.log("Result", result)
+
       if (!result || result.length === 0) {
         const { context } = await vectorSearch(question);
 
         const ragAnswer = await callLLM([
           {
             role: "system",
-            content: "Tell user that a full query of the database failed. Then answer using the context and give insights. Be concise.",
+            content:
+              "Tell user that a full query failed, then answer using context.",
           },
           {
             role: "user",
@@ -262,12 +188,7 @@ export async function POST(req: NextRequest) {
         messages: [
           {
             role: "user",
-            content: `
-Answer and give insights.
-
-Question: ${question}
-Data: ${JSON.stringify(result)}
-`,
+            content: `Question: ${question}\nData: ${JSON.stringify(result)}`,
           },
         ],
       });
@@ -277,6 +198,16 @@ Data: ${JSON.stringify(result)}
         "No meaningful data found";
 
       const followUps = await generateFollowUps(question, summary);
+
+      // ✅ STORE ASSISTANT RESPONSE
+      if (sessionId) {
+        await redis.rpush(
+          key,
+          JSON.stringify({ role: "assistant", content: summary })
+        );
+        await redis.ltrim(key, -20, -1);
+        await redis.expire(key, 3600);
+      }
 
       return new Response(
         JSON.stringify({
@@ -306,14 +237,9 @@ Data: ${JSON.stringify(result)}
         const rawAnswer = await callLLM([
           {
             role: "system",
-            content: `
-You are a helpful assistant.
-Use past conversation and context.
-Be concise.
-Dont answer and give followups for general questions, only for specific questions related to orders, customers, payments, products.
-`,
+            content: `You are a helpful assistant.`,
           },
-          ...(history || []).map((msg: any) => ({
+          ...finalHistory.map((msg: any) => ({
             role: msg.role,
             content: msg.content,
           })),
@@ -325,15 +251,25 @@ Dont answer and give followups for general questions, only for specific question
 
         const followUps = await generateFollowUps(question, rawAnswer);
 
+        let fullText = "";
+
         for (const char of rawAnswer) {
+          fullText += char;
           controller.enqueue(encoder.encode(char));
           await new Promise((r) => setTimeout(r, 5));
         }
 
+        if (sessionId) {
+          await redis.rpush(
+            key,
+            JSON.stringify({ role: "assistant", content: fullText })
+          );
+          await redis.ltrim(key, -20, -1);
+          await redis.expire(key, 3600);
+        }
+
         controller.enqueue(
-          encoder.encode(
-            "\n__FOLLOWUPS__" + JSON.stringify(followUps)
-          )
+          encoder.encode("\n__FOLLOWUPS__" + JSON.stringify(followUps))
         );
 
         controller.close();
