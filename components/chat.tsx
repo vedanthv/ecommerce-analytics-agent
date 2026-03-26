@@ -12,20 +12,20 @@ export default function Chat({ selectedChat }: any) {
   const [currentChatId, setCurrentChatId] = useState<number | null>(null);
   const [chatTitle, setChatTitle] = useState<string>("New Chat");
 
-  // ✅ NEW: session id for Redis
-  const [sessionId, setSessionId] = useState<string>("");
+  // ✅ FIX: synchronous session init (NO race condition)
+  const [sessionId] = useState(() => {
+    if (typeof window !== "undefined") {
+      let id = localStorage.getItem("session_id");
 
-  // ================= INIT SESSION =================
-  useEffect(() => {
-    let id = localStorage.getItem("session_id");
+      if (!id) {
+        id = crypto.randomUUID();
+        localStorage.setItem("session_id", id);
+      }
 
-    if (!id) {
-      id = crypto.randomUUID();
-      localStorage.setItem("session_id", id);
+      return id;
     }
-
-    setSessionId(id);
-  }, []);
+    return "";
+  });
 
   // ================= LOAD SELECTED CHAT =================
   useEffect(() => {
@@ -88,7 +88,7 @@ export default function Chat({ selectedChat }: any) {
   // ================= SEND MESSAGE =================
   const sendMessage = async (customInput?: string) => {
     const question = customInput || input;
-    if (!question) return;
+    if (!question || !sessionId) return; // ✅ SAFE GUARD
 
     if (messages.length === 0) {
       generateTitle(question);
@@ -105,7 +105,7 @@ export default function Chat({ selectedChat }: any) {
       body: JSON.stringify({
         question,
         history: messages.slice(-6),
-        sessionId, // ✅ NEW (ONLY CHANGE)
+        sessionId, // ✅ SAFE
       }),
     });
 
@@ -138,6 +138,7 @@ export default function Chat({ selectedChat }: any) {
 
         const chunk = decoder.decode(value);
 
+        // ✅ FOLLOWUPS LOGIC — UNCHANGED
         if (chunk.includes("__FOLLOWUPS__")) {
           const [textPart, followPart] = chunk.split("__FOLLOWUPS__");
 
