@@ -6,11 +6,24 @@ import { useState } from "react";
 
 export default function Page() {
   const [selectedChat, setSelectedChat] = useState<any>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   return (
-    <div className="flex h-screen bg-gradient-to-br from-zinc-950 via-black to-zinc-900 text-white">
-      <Sidebar onSelectChat={setSelectedChat} />
-      <Chat selectedChat={selectedChat} />
+    <div className="relative flex h-[100dvh] overflow-hidden bg-gradient-to-br from-zinc-950 via-black to-zinc-900 text-white">
+      <Sidebar
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        activeChatId={selectedChat?.id}
+        onSelectChat={(chat: any) => {
+          setSelectedChat(chat);
+          setSidebarOpen(false);
+        }}
+      />
+
+      <Chat
+        selectedChat={selectedChat}
+        onOpenSidebar={() => setSidebarOpen(true)}
+      />
     </div>
   );
 }

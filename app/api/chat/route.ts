@@ -10,6 +10,10 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
+export const runtime = "nodejs";
+
+type QueryContext = Record<string, Array<string | number>>;
+
 // ================= SQL HELPERS =================
 
 function cleanSQL(sql: string) {
@@ -39,9 +43,9 @@ function getPromptTemplate(): string {
   return cachedPrompt;
 }
 
-let lastQueryContext: any = null;
+let lastQueryContext: QueryContext | null = null;
 
-function summarizeContext(rows: any[]) {
+function summarizeContext(rows: Array<Record<string, unknown>>): QueryContext | null {
   if (!rows || rows.length === 0) return null;
 
   const sample = rows.slice(0, 5); // limit size
@@ -51,18 +55,18 @@ function summarizeContext(rows: any[]) {
     k.toLowerCase().includes("id")
   );
 
-  const summary: any = {};
+  const summary: QueryContext = {};
 
   for (const field of idFields) {
     summary[field] = sample
       .map((r) => r[field])
-      .filter(Boolean);
+      .filter((value): value is string | number => typeof value === "string" || typeof value === "number");
   }
 
   return summary;
 }
 
-function formatContextForPrompt(context: any) {
+function formatContextForPrompt(context: QueryContext | null) {
   if (!context) return "";
 
   let text = "\nPrevious query result context:\n";
@@ -76,6 +80,44 @@ function formatContextForPrompt(context: any) {
   }
 
   return text;
+}
+
+function shouldForceSqlFollowUp(question: string, context: QueryContext | null) {
+  if (!context) return false;
+
+  const q = question.toLowerCase();
+  const hasFollowUpReference = /\b(this|that|these|those|it|them|same)\b/.test(q);
+  const hasShippingIntent = /\bshipping|delivery|instruction|address|fulfillment|dispatch\b/.test(q);
+  const hasOrderIntent = /\border\b/.test(q);
+  const hasOrderContext = Object.keys(context).some(
+    (key) => key.toLowerCase() === "order_id" || key.toLowerCase().includes("order")
+  );
+
+  return hasOrderContext && (hasShippingIntent || (hasOrderIntent && hasFollowUpReference));
+}
+
+async function getSessionContext(sessionId?: string): Promise<QueryContext | null> {
+  if (!sessionId) return null;
+
+  try {
+    const raw = await redis.get(`chat_ctx:${sessionId}`);
+    if (!raw || typeof raw !== "string") return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as QueryContext) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveSessionContext(sessionId: string, context: QueryContext | null) {
+  if (!context) return;
+
+  const ctxKey = `chat_ctx:${sessionId}`;
+  await redis
+    .pipeline()
+    .set(ctxKey, JSON.stringify(context))
+    .expire(ctxKey, 3600)
+    .exec();
 }
 
 async function generateSQL(question: string, history: any[] = []) {
@@ -103,31 +145,48 @@ async function generateSQL(question: string, history: any[] = []) {
 
 async function runSQL(query: string) {
   console.log("Running SQL:", query);
-  const res = await fetch(process.env.DATABRICKS_SQL_URL!, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.DATABRICKS_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      statement: query,
-      warehouse_id: process.env.DATABRICKS_WAREHOUSE_ID,
-      wait_timeout: "30s",
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25_000);
 
-  const data = await res.json();
-
-  const columns = data?.manifest?.schema?.columns || [];
-  const rows = data?.result?.data_array || [];
-
-  return rows.map((row: any[]) => {
-    const obj: any = {};
-    columns.forEach((col: any, i: number) => {
-      obj[col.name] = row[i];
+  try {
+    const res = await fetch(process.env.DATABRICKS_SQL_URL!, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.DATABRICKS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        statement: query,
+        warehouse_id: process.env.DATABRICKS_WAREHOUSE_ID,
+        wait_timeout: "20s",
+      }),
+      signal: controller.signal,
     });
-    return obj;
-  });
+
+    const data = await res.json();
+
+    const columns = data?.manifest?.schema?.columns || [];
+    const rows = data?.result?.data_array || [];
+
+    return rows.map((row: any[]) => {
+      const obj: any = {};
+      columns.forEach((col: any, i: number) => {
+        obj[col.name] = row[i];
+      });
+      return obj;
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function appendHistory(key: string, role: "user" | "assistant", content: string) {
+  await redis
+    .pipeline()
+    .rpush(key, JSON.stringify({ role, content }))
+    .ltrim(key, -20, -1)
+    .expire(key, 3600)
+    .exec();
 }
 
 // ================= FOLLOW UPS =================
@@ -164,17 +223,24 @@ Answer: ${answer}
 // ================= MAIN =================
 
 export async function POST(req: NextRequest) {
+  const t0 = performance.now();
   const { question, history, sessionId } = await req.json(); 
 
   const key = `chat:${sessionId}`;
+  const sessionContext = await getSessionContext(sessionId);
+  if (sessionContext) {
+    lastQueryContext = sessionContext;
+  }
 
   let redisHistory: any[] = [];
 
-  try {
-    const stored = await redis.lrange(key, 0, -1);
-    redisHistory = stored.map((m: string) => JSON.parse(m));
-  } catch {
-    redisHistory = [];
+  if (sessionId) {
+    try {
+      const stored = await redis.lrange(key, 0, -1);
+      redisHistory = (stored || []).map((m: string) => JSON.parse(m));
+    } catch {
+      redisHistory = [];
+    }
   }
 
   const finalHistory = redisHistory.length
@@ -182,26 +248,38 @@ export async function POST(req: NextRequest) {
     : history || [];
 
   if (sessionId) {
-    await redis.rpush(
-      key,
-      JSON.stringify({ role: "user", content: question })
-    );
-    await redis.ltrim(key, -20, -1);
-    await redis.expire(key, 3600);
+    await appendHistory(key, "user", question);
   }
 
-  const sqlOrRag = await generateSQL(question, finalHistory);
-  const useSQL = sqlOrRag.trim() !== "RAG";
+  let sqlOrRag = await generateSQL(question, finalHistory);
+  let useSQL = sqlOrRag.trim() !== "RAG";
+  let forcedSql = false;
+
+  if (!useSQL && shouldForceSqlFollowUp(question, lastQueryContext)) {
+    const forcedQuestion = `${question}\n\nThis is a follow-up to previous SQL results. Resolve pronouns like 'this order' using previous context and return SQL only.`;
+    sqlOrRag = await generateSQL(forcedQuestion, finalHistory);
+    useSQL = sqlOrRag.trim() !== "RAG";
+    forcedSql = useSQL;
+  }
+
+  const decisionReason = useSQL
+    ? forcedSql
+      ? "Follow-up referenced prior order context, so SQL mode was forced."
+      : "Question was classified as structured analytics, so SQL mode was selected."
+    : "Question was classified as unstructured retrieval, so RAG mode was selected.";
 
   console.log("ROUTE:", useSQL ? "SQL" : "RAG");
 
   // ================= SQL ROUTE =================
   if (useSQL) {
     try {
-      const sql = await generateSQL(question);
+      const sql = sqlOrRag;
       const result = await runSQL(sql);
       console.log(result);
       lastQueryContext = summarizeContext(result);
+      if (sessionId) {
+        await saveSessionContext(sessionId, lastQueryContext);
+      }
       if (!result || result.length === 0) {
         const { context } = await vectorSearch(question);
 
@@ -222,6 +300,9 @@ export async function POST(req: NextRequest) {
             answer: ragAnswer,
             table: [],
             followUps: [],
+            mode: "RAG",
+            reason: "SQL returned no rows; switched to retrieval context.",
+            context: lastQueryContext,
           }),
           { headers: { "Content-Type": "application/json" } }
         );
@@ -241,22 +322,22 @@ export async function POST(req: NextRequest) {
         summaryRes.choices[0].message.content ||
         "No meaningful data found";
 
-      const followUps = await generateFollowUps(question, summary);
+      const followUps = await generateFollowUps(question, summary).catch(() => []);
 
       if (sessionId) {
-        await redis.rpush(
-          key,
-          JSON.stringify({ role: "assistant", content: summary })
-        );
-        await redis.ltrim(key, -20, -1);
-        await redis.expire(key, 3600);
+        await appendHistory(key, "assistant", summary);
       }
+
+      console.info("[chat][SQL] total_ms", Math.round(performance.now() - t0));
 
       return new Response(
         JSON.stringify({
           answer: summary,
           table: result,
           followUps,
+          mode: "SQL",
+          reason: decisionReason,
+          context: lastQueryContext,
         }),
         { headers: { "Content-Type": "application/json" } }
       );
@@ -288,34 +369,40 @@ export async function POST(req: NextRequest) {
           })),
           {
             role: "user",
-            content: `Q: ${question}\n\nContext:\n${context}`,
+            content: `Q: ${question}${formatContextForPrompt(lastQueryContext)}\n\nContext:\n${context}`,
           },
         ]);
 
-        const followUps = await generateFollowUps(question, rawAnswer);
+        const followUpsPromise = generateFollowUps(question, rawAnswer).catch(() => []);
 
         let fullText = "";
 
-        for (const char of rawAnswer) {
-          fullText += char;
-          controller.enqueue(encoder.encode(char));
-          await new Promise((r) => setTimeout(r, 5));
+        const chunkSize = 64;
+        for (let i = 0; i < rawAnswer.length; i += chunkSize) {
+          const chunk = rawAnswer.slice(i, i + chunkSize);
+          fullText += chunk;
+          controller.enqueue(encoder.encode(chunk));
         }
 
         if (sessionId) {
-          await redis.rpush(
-            key,
-            JSON.stringify({ role: "assistant", content: fullText })
-          );
-          await redis.ltrim(key, -20, -1);
-          await redis.expire(key, 3600);
+          await appendHistory(key, "assistant", fullText);
         }
+
+        const followUps = await followUpsPromise;
 
         controller.enqueue(
           encoder.encode("\n__FOLLOWUPS__" + JSON.stringify(followUps))
         );
+        controller.enqueue(
+          encoder.encode("\n__META__" + JSON.stringify({
+            mode: "RAG",
+            reason: decisionReason,
+            context: lastQueryContext,
+          }))
+        );
 
         controller.close();
+        console.info("[chat][RAG] total_ms", Math.round(performance.now() - t0));
       } catch (e: any) {
         controller.enqueue(encoder.encode("Error: " + e.message));
         controller.close();
@@ -323,5 +410,10 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  return new Response(stream);
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
 }
