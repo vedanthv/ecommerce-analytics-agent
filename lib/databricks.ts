@@ -1,6 +1,8 @@
 import axios from "axios";
 import { Agent as HttpsAgent } from "https";
 
+export type SqlRow = Record<string, unknown>;
+
 const HOST = process.env.DATABRICKS_HOST!;
 const TOKEN = process.env.DATABRICKS_TOKEN!;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY!;
@@ -168,4 +170,59 @@ ${r.text}
     );
     throw err;
   }
+}
+
+const WAREHOUSE_ID = process.env.DATABRICKS_WAREHOUSE_ID!;
+
+function mapStatementRows(data: any): SqlRow[] {
+  const columns = data?.manifest?.schema?.columns || [];
+  const rows = data?.result?.data_array || [];
+
+  return rows.map((row: unknown[]) => {
+    const mapped: SqlRow = {};
+
+    columns.forEach((col: { name: string }, index: number) => {
+      mapped[col.name] = row[index];
+    });
+
+    return mapped;
+  });
+}
+
+export async function executeSqlStatement(statement: string, waitTimeout = "20s") {
+  const res = await databricksHttp.post("/api/2.0/sql/statements", {
+    warehouse_id: WAREHOUSE_ID,
+    statement,
+    wait_timeout: waitTimeout,
+  });
+
+  return mapStatementRows(res.data);
+}
+
+export async function saveFeedback(feedback: {
+  messageId: string;
+  sessionId: string;
+  rating: "like" | "dislike";
+  comment: string | null;
+  assistantMessage: string;
+  userMessage: string;
+}) {
+  const escape = (v: string | null) =>
+    v === null ? "NULL" : `'${v.replace(/'/g, "''")}'`;
+
+  const sql = `
+    INSERT INTO customer_suppport_agent.raw.message_feedback
+      (message_id, session_id, rating, comment, assistant_message, user_message, created_at)
+    VALUES (
+      ${escape(feedback.messageId)},
+      ${escape(feedback.sessionId)},
+      ${escape(feedback.rating)},
+      ${escape(feedback.comment)},
+      ${escape(feedback.assistantMessage)},
+      ${escape(feedback.userMessage)},
+      current_timestamp()
+    )
+  `;
+
+  await executeSqlStatement(sql, "10s");
 }

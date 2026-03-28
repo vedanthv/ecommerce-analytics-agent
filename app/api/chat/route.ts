@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { vectorSearch } from "@/lib/databricks";
 import { callLLM } from "@/lib/llm";
+import { endMlflowRun, logMlflowMetrics, logMlflowParams, logMlflowTags, startMlflowRun } from "@/lib/mlflow";
 import OpenAI from "openai";
 import redis from "@/lib/redis"; 
 import fs from "fs";
@@ -11,6 +12,11 @@ const openai = new OpenAI({
 });
 
 export const runtime = "nodejs";
+
+const CLASSIFIER_MODEL = "gpt-4o-mini";
+const SUMMARY_MODEL = "gpt-4o-mini";
+const FOLLOWUPS_MODEL = "gpt-4o-mini";
+const RAG_RESPONSE_MODEL = "gpt-4o-mini";
 
 type QueryContext = Record<string, Array<string | number>>;
 
@@ -96,6 +102,21 @@ function shouldForceSqlFollowUp(question: string, context: QueryContext | null) 
   return hasOrderContext && (hasShippingIntent || (hasOrderIntent && hasFollowUpReference));
 }
 
+function shouldForceSqlAnalytics(question: string) {
+  const q = question.toLowerCase();
+
+  const hasDomainIntent = /\border|orders|revenue|sales|customer|customers|payment|payments|delivery|shipments?\b/.test(q);
+  const hasTimeSeriesIntent = /\btrend|trends|over time|timeline|month over month|week over week|year over year|monthly|weekly|daily|quarterly|yearly|by month|by week|by day|by quarter|by year\b/.test(q);
+  const hasAnalyticVerb = /\banaly[sz]e|analysis|show|summari[sz]e|breakdown|compare|group\b/.test(q);
+  const hasBroadStructuredIntent = /\banalytics?|summary|overview|breakdown|metrics?|kpis?|stats?|statistics|totals?\b/.test(q);
+  const hasWholeDatasetScope = /\ball\b|\boverall\b|\bwhole\b|\bentire\b|\bfull\b|\bacross the db\b|\bacross the database\b/.test(q);
+
+  return hasDomainIntent && (
+    (hasTimeSeriesIntent && hasAnalyticVerb) ||
+    (hasBroadStructuredIntent && hasWholeDatasetScope)
+  );
+}
+
 async function getSessionContext(sessionId?: string): Promise<QueryContext | null> {
   if (!sessionId) return null;
 
@@ -136,7 +157,7 @@ async function generateSQL(question: string, history: any[] = []) {
 
   console.log(prompt.substring(0, 500));
   const res = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: CLASSIFIER_MODEL,
     temperature: 0,
     messages: [{ role: "user", content: prompt }],
   });
@@ -200,14 +221,14 @@ Rules:
 - No numbering
 - No symbols
 
-Dont answer or give followups for general questions.
+Dont give questions please. Give some suggestions for additional insights that are useful for the user. 
 
 Question: ${question}
 Answer: ${answer}
 `;
 
   const res = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: FOLLOWUPS_MODEL,
     messages: [{ role: "user", content: prompt }],
   });
 
@@ -224,7 +245,33 @@ Answer: ${answer}
 
 export async function POST(req: NextRequest) {
   const t0 = performance.now();
-  const { question, history, sessionId } = await req.json(); 
+  const { question, history, sessionId } = await req.json();
+  const requestId = crypto.randomUUID();
+
+  const mlflowRunId = await startMlflowRun({
+    endpoint: "api_chat",
+    request_id: requestId,
+    session_id: String(sessionId ?? "unknown"),
+  });
+
+  await logMlflowTags(mlflowRunId, {
+    "genai.app": "orders-ai-agent",
+    "genai.use_case": "customer_support_analytics",
+    "genai.provider": "openai",
+    "genai.pipeline": "classifier_sql_rag_hybrid",
+  });
+
+  await logMlflowParams(mlflowRunId, {
+    question_len: String((question ?? "").length),
+    has_history: String(Boolean(history?.length)),
+    has_session: String(Boolean(sessionId)),
+    model_classifier: CLASSIFIER_MODEL,
+    model_summary: SUMMARY_MODEL,
+    model_followups: FOLLOWUPS_MODEL,
+    model_rag_response: RAG_RESPONSE_MODEL,
+  });
+
+  const timings: Record<string, number> = {};
 
   const key = `chat:${sessionId}`;
   const sessionContext = await getSessionContext(sessionId);
@@ -251,15 +298,28 @@ export async function POST(req: NextRequest) {
     await appendHistory(key, "user", question);
   }
 
+  const tClassify0 = performance.now();
   let sqlOrRag = await generateSQL(question, finalHistory);
   let useSQL = sqlOrRag.trim() !== "RAG";
   let forcedSql = false;
+  timings.classify_ms = Math.round(performance.now() - tClassify0);
 
-  if (!useSQL && shouldForceSqlFollowUp(question, lastQueryContext)) {
-    const forcedQuestion = `${question}\n\nThis is a follow-up to previous SQL results. Resolve pronouns like 'this order' using previous context and return SQL only.`;
+  if (!useSQL && shouldForceSqlAnalytics(question)) {
+    const forcedQuestion = `${question}\n\nThis request is clearly asking for structured time-series analytics. Return SQL only, grouped at the requested time grain.`;
+    const tForcedAnalytics0 = performance.now();
     sqlOrRag = await generateSQL(forcedQuestion, finalHistory);
     useSQL = sqlOrRag.trim() !== "RAG";
     forcedSql = useSQL;
+    timings.forced_analytics_classify_ms = Math.round(performance.now() - tForcedAnalytics0);
+  }
+
+  if (!useSQL && shouldForceSqlFollowUp(question, lastQueryContext)) {
+    const forcedQuestion = `${question}\n\nThis is a follow-up to previous SQL results. Resolve pronouns like 'this order' using previous context and return SQL only.`;
+    const tForcedClassify0 = performance.now();
+    sqlOrRag = await generateSQL(forcedQuestion, finalHistory);
+    useSQL = sqlOrRag.trim() !== "RAG";
+    forcedSql = useSQL;
+    timings.forced_classify_ms = Math.round(performance.now() - tForcedClassify0);
   }
 
   const decisionReason = useSQL
@@ -274,15 +334,25 @@ export async function POST(req: NextRequest) {
   if (useSQL) {
     try {
       const sql = sqlOrRag;
+      await logMlflowParams(mlflowRunId, {
+        route_mode: "SQL",
+        forced_sql: String(forcedSql),
+      });
+
+      const tSqlExec0 = performance.now();
       const result = await runSQL(sql);
+      timings.sql_exec_ms = Math.round(performance.now() - tSqlExec0);
       console.log(result);
       lastQueryContext = summarizeContext(result);
       if (sessionId) {
         await saveSessionContext(sessionId, lastQueryContext);
       }
       if (!result || result.length === 0) {
+        const tRetrieval0 = performance.now();
         const { context } = await vectorSearch(question);
+        timings.retrieval_ms = Math.round(performance.now() - tRetrieval0);
 
+        const tRagLlm0 = performance.now();
         const ragAnswer = await callLLM([
           {
             role: "system",
@@ -294,6 +364,16 @@ export async function POST(req: NextRequest) {
             content: `Q: ${question}\n\nContext:\n${context}`,
           },
         ]);
+        timings.rag_llm_ms = Math.round(performance.now() - tRagLlm0);
+        timings.total_ms = Math.round(performance.now() - t0);
+
+        await logMlflowMetrics(mlflowRunId, {
+          ...timings,
+          route_sql: 1,
+          fallback_to_rag: 1,
+          sql_rows: 0,
+        });
+        await endMlflowRun(mlflowRunId, "FINISHED");
 
         return new Response(
           JSON.stringify({
@@ -303,13 +383,15 @@ export async function POST(req: NextRequest) {
             mode: "RAG",
             reason: "SQL returned no rows; switched to retrieval context.",
             context: lastQueryContext,
+            requestId,
           }),
           { headers: { "Content-Type": "application/json" } }
         );
       }
 
+      const tSummary0 = performance.now();
       const summaryRes = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
+        model: SUMMARY_MODEL,
         messages: [
           {
             role: "user",
@@ -317,6 +399,7 @@ export async function POST(req: NextRequest) {
           },
         ],
       });
+      timings.summary_llm_ms = Math.round(performance.now() - tSummary0);
 
       const summary =
         summaryRes.choices[0].message.content ||
@@ -328,6 +411,16 @@ export async function POST(req: NextRequest) {
         await appendHistory(key, "assistant", summary);
       }
 
+      timings.total_ms = Math.round(performance.now() - t0);
+
+      await logMlflowMetrics(mlflowRunId, {
+        ...timings,
+        route_sql: 1,
+        fallback_to_rag: 0,
+        sql_rows: result.length,
+      });
+      await endMlflowRun(mlflowRunId, "FINISHED");
+
       console.info("[chat][SQL] total_ms", Math.round(performance.now() - t0));
 
       return new Response(
@@ -338,10 +431,19 @@ export async function POST(req: NextRequest) {
           mode: "SQL",
           reason: decisionReason,
           context: lastQueryContext,
+          requestId,
         }),
         { headers: { "Content-Type": "application/json" } }
       );
     } catch (e: any) {
+      timings.total_ms = Math.round(performance.now() - t0);
+      await logMlflowMetrics(mlflowRunId, {
+        ...timings,
+        route_sql: 1,
+        failed: 1,
+      });
+      await endMlflowRun(mlflowRunId, "FAILED");
+
       return new Response(
         JSON.stringify({ message: e.message }),
         { headers: { "Content-Type": "application/json" } }
@@ -356,8 +458,16 @@ export async function POST(req: NextRequest) {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const { context } = await vectorSearch(question);
+        await logMlflowParams(mlflowRunId, {
+          route_mode: "RAG",
+          forced_sql: String(forcedSql),
+        });
 
+        const tRetrieval0 = performance.now();
+        const { context } = await vectorSearch(question);
+        timings.retrieval_ms = Math.round(performance.now() - tRetrieval0);
+
+        const tRagLlm0 = performance.now();
         const rawAnswer = await callLLM([
           {
             role: "system",
@@ -372,6 +482,7 @@ export async function POST(req: NextRequest) {
             content: `Q: ${question}${formatContextForPrompt(lastQueryContext)}\n\nContext:\n${context}`,
           },
         ]);
+        timings.rag_llm_ms = Math.round(performance.now() - tRagLlm0);
 
         const followUpsPromise = generateFollowUps(question, rawAnswer).catch(() => []);
 
@@ -398,14 +509,30 @@ export async function POST(req: NextRequest) {
             mode: "RAG",
             reason: decisionReason,
             context: lastQueryContext,
+            requestId,
           }))
         );
 
         controller.close();
+        timings.total_ms = Math.round(performance.now() - t0);
+        await logMlflowMetrics(mlflowRunId, {
+          ...timings,
+          route_sql: 0,
+          fallback_to_rag: 0,
+          answer_chars: rawAnswer.length,
+        });
+        await endMlflowRun(mlflowRunId, "FINISHED");
         console.info("[chat][RAG] total_ms", Math.round(performance.now() - t0));
       } catch (e: any) {
         controller.enqueue(encoder.encode("Error: " + e.message));
         controller.close();
+        timings.total_ms = Math.round(performance.now() - t0);
+        await logMlflowMetrics(mlflowRunId, {
+          ...timings,
+          route_sql: 0,
+          failed: 1,
+        });
+        await endMlflowRun(mlflowRunId, "FAILED");
       }
     },
   });

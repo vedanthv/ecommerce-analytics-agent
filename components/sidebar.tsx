@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: any) {
   const [chats, setChats] = useState<any[]>([]);
   const [search, setSearch] = useState("");
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const readChats = () => {
     const saved = localStorage.getItem("chat_history");
@@ -70,6 +72,30 @@ export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: a
     writeChats(next);
   };
 
+  const deleteChat = (chatId: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const next = readChats().filter((c: any) => c.id !== chatId);
+    writeChats(next);
+    if (activeChatId === chatId) {
+      onSelectChat(null);
+    }
+  };
+
+  const startRename = (chat: any, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRenamingId(chat.id);
+    setRenameValue(chat.title || "Untitled Chat");
+  };
+
+  const commitRename = () => {
+    if (!renamingId) return;
+    const next = readChats().map((c: any) =>
+      c.id === renamingId ? { ...c, title: renameValue.trim() || "Untitled Chat" } : c
+    );
+    writeChats(next);
+    setRenamingId(null);
+  };
+
   const filtered = chats
     .filter((chat) => (chat.title || "Untitled Chat").toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => {
@@ -129,40 +155,89 @@ export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: a
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-2">
+      <div className="flex-1 overflow-y-auto space-y-1">
         {filtered.length === 0 && (
           <div className="text-sm text-zinc-400 text-center mt-10">
             No matching chats
           </div>
         )}
 
-        {filtered.map((chat, i) => (
-          <div
-            key={i}
-            onClick={() => handleSelect(chat)}
-            className={`p-3 rounded-xl cursor-pointer transition text-sm sm:text-base border ${
-              activeChatId === chat.id
-                ? "bg-white/15 border-indigo-400/40"
-                : "border-transparent hover:bg-white/10"
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <div className="truncate">{chat.title || "Untitled Chat"}</div>
-              <button
-                type="button"
-                className="rounded px-1 text-xs text-zinc-300 hover:bg-white/10"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  togglePin(chat.id);
-                }}
-                aria-label={chat.pinned ? "Unpin chat" : "Pin chat"}
+        {filtered.map((chat, i) => {
+          const showPinnedHeader = i === 0 && chat.pinned;
+          const showRecentDivider = i > 0 && !chat.pinned && filtered[i - 1]?.pinned;
+          return (
+            <div key={chat.id ?? i}>
+              {showPinnedHeader && (
+                <div className="text-[10px] uppercase tracking-wider text-zinc-500 px-2 mb-1 mt-1">
+                  Pinned
+                </div>
+              )}
+              {showRecentDivider && (
+                <div className="flex items-center gap-2 my-2 px-1">
+                  <div className="flex-1 h-px bg-white/10" />
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500">Recent</span>
+                  <div className="flex-1 h-px bg-white/10" />
+                </div>
+              )}
+              <div
+                onClick={() => handleSelect(chat)}
+                className={`p-3 rounded-xl cursor-pointer transition text-sm sm:text-base border ${
+                  activeChatId === chat.id
+                    ? "bg-white/15 border-indigo-400/40"
+                    : "border-transparent hover:bg-white/10"
+                }`}
               >
-                {chat.pinned ? "Pinned" : "Pin"}
-              </button>
+                <div className="flex items-center justify-between gap-2">
+                  {renamingId === chat.id ? (
+                    <input
+                      autoFocus
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") commitRename();
+                        if (e.key === "Escape") setRenamingId(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex-1 min-w-0 bg-transparent border-b border-indigo-400 outline-none text-sm text-white"
+                    />
+                  ) : (
+                    <div
+                      className="truncate"
+                      onDoubleClick={(e) => startRename(chat, e)}
+                      title="Double-click to rename"
+                    >
+                      {chat.title || "Untitled Chat"}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      className="rounded px-1 text-[11px] text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        togglePin(chat.id);
+                      }}
+                      aria-label={chat.pinned ? "Unpin chat" : "Pin chat"}
+                    >
+                      {chat.pinned ? "📌" : "Pin"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded p-0.5 text-[11px] text-zinc-500 hover:text-red-300 hover:bg-red-500/10 transition"
+                      onClick={(e) => deleteChat(chat.id, e)}
+                      aria-label="Delete chat"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-1 text-[11px] text-zinc-400">{formatTime(chat.updatedAt)}</div>
+              </div>
             </div>
-            <div className="mt-1 text-[11px] text-zinc-400">{formatTime(chat.updatedAt)}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       </aside>
     </>

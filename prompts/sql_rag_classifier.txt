@@ -26,6 +26,8 @@ STRICT RULES:
   or any numeric computation
   → ALWAYS use SQL.
 
+* If the user asks for analytics, summary, overview, breakdown, metrics, KPIs, or statistics for all orders / overall orders / the full orders dataset, then use SQL ONLY and NOT RAG.
+
 * Dont answer any questions not in customer support, orders or payments domain. If outside domain, return NOTHING.
 
 * Use ONLY these exact tables:
@@ -171,6 +173,17 @@ Example 5 (RAG case):
 User: Why are customers unhappy?
 Output:
 RAG
+
+Example 5b (Whole dataset analytics → MUST SQL):
+User: Give me concise analytics of all orders
+Output:
+SELECT
+  COUNT(*) AS total_orders,
+  SUM(order_amount) AS total_revenue,
+  AVG(order_amount) AS avg_order_amount,
+  SUM(quantity) AS total_items,
+  COUNT(DISTINCT customer_id) AS unique_customers
+FROM customer_suppport_agent.raw.orders
 
 Example 6 (User activity filter):
 User: Show number of clicks by device type

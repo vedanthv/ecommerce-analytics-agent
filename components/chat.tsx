@@ -1,7 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Message from "./message";
+
+const MAX_INPUT_CHARS = 500;
+
+const QUICK_PROMPTS = [
+  "How many orders were placed in total",
+  "Which city placed all orders",
+  "Give me concise analytics of all orders",
+];
 
 export default function Chat({ selectedChat, onOpenSidebar }: any) {
   const [messages, setMessages] = useState<any[]>([]);
@@ -15,6 +23,24 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
   const [chatTitle, setChatTitle] = useState<string>("New Chat");
 
   const [sessionId, setSessionId] = useState<string>("");
+
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+
+  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
+  };
+
+  const handleScroll = () => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    setShowScrollDown(el.scrollHeight - el.scrollTop - el.clientHeight > 120);
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -165,14 +191,14 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
 
   // ================= SEND MESSAGE =================
   const sendMessage = async (customInput?: string) => {
-    const question = customInput || input;
+    const question = (customInput || input).trim();
     if (!question || !sessionId) return;
 
     if (messages.length === 0) {
       generateTitle(question);
     }
 
-    const newMessages = [...messages, { role: "user", content: question }];
+    const newMessages = [...messages, { role: "user", content: question, timestamp: Date.now() }];
     setMessages(newMessages);
     setInput("");
     setLoading(true);
@@ -220,6 +246,7 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
             table: data.table,
             mode: data.mode || "SQL",
             reason: data.reason || "",
+            timestamp: Date.now(),
           },
         ]);
 
@@ -264,6 +291,7 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
                 content: envelope.text,
                 mode: envelope.meta?.mode || "RAG",
                 reason: envelope.meta?.reason || "Used retrieval context for this response.",
+                timestamp: Date.now(),
               },
             ];
           });
@@ -307,7 +335,7 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
 
   // ================= UI =================
   return (
-    <div className="flex-1 min-w-0 flex flex-col backdrop-blur-xl">
+    <div className="flex-1 min-w-0 flex flex-col backdrop-blur-xl relative">
       <div className="flex items-center justify-between border-b border-white/10 bg-black/30 px-3 py-2 md:hidden">
         <button
           type="button"
@@ -320,7 +348,36 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
         <div className="truncate text-sm text-zinc-300">{chatTitle}</div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 space-y-4 sm:space-y-6">
+      <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
+        className="flex-1 overflow-y-auto p-3 sm:p-5 md:p-6 space-y-4 sm:space-y-6"
+      >
+        {/* ── Welcome screen ── */}
+        {messages.length === 0 && !loading && (
+          <div className="flex flex-col items-center justify-center h-full min-h-[60vh] gap-6 text-center px-4">
+            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-2xl font-bold shadow-lg shadow-indigo-500/30 text-white select-none">
+              AI
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-white mb-2">E-Commerce Analytics AI Agent</h1>
+              <p className="text-zinc-400 text-sm max-w-sm">
+                Ask questions about orders, customers, and trends. Powered by SQL + RAG.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-xl">
+              {QUICK_PROMPTS.map((p) => (
+                <button
+                  key={p}
+                  onClick={() => sendMessage(p)}
+                  className="rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 p-3 text-sm text-zinc-200 text-left transition hover:border-indigo-400/30 hover:-translate-y-0.5"
+                >
+                  {p}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {messages.map((m, i) => (
           <Message
             key={i}
@@ -329,20 +386,28 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
             table={m.table}
             mode={m.mode}
             reason={m.reason}
+            timestamp={m.timestamp}
+            messageId={m.messageId ?? `${currentChatId ?? "new"}-${i}`}
+            sessionId={sessionId}
+            userMessage={
+              m.role === "assistant"
+                ? messages.slice(0, i).findLast((x: any) => x.role === "user")?.content ?? ""
+                : undefined
+            }
             onAction={(action: "regenerate" | "explain" | "continue") => handleMessageAction(action, i)}
           />
         ))}
 
         {loading && (
-          <div className="flex gap-3 items-center px-1 sm:px-2 rounded-xl border border-white/10 bg-white/5 p-3">
+          <div className="flex gap-3 items-center px-1 sm:px-2 rounded-xl border border-white/10 bg-white/5 p-3 shadow-[0_0_35px_rgba(99,102,241,0.12)]">
             <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-r from-indigo-500 to-purple-600 flex items-center justify-center text-xs sm:text-sm font-bold">
               AI
             </div>
 
             <div className="flex-1">
               <div className="text-xs sm:text-sm text-zinc-300 mb-2">{loadingStage || "Working"}</div>
-              <div className="h-2 w-full overflow-hidden rounded bg-white/10">
-                <div className="h-full w-1/3 animate-pulse rounded bg-indigo-400/80" />
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                <div className="h-full shimmer-bar rounded-full" />
               </div>
             </div>
 
@@ -367,7 +432,20 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
             ))}
           </div>
         )}
+
+        <div ref={messagesEndRef} />
       </div>
+
+      {/* ── Scroll-to-bottom FAB ── */}
+      {showScrollDown && (
+        <button
+          onClick={() => scrollToBottom()}
+          className="absolute bottom-24 right-4 z-10 rounded-full bg-indigo-500/90 p-2.5 shadow-lg hover:bg-indigo-600 transition-all backdrop-blur-sm border border-white/10 text-white text-sm leading-none"
+          aria-label="Scroll to bottom"
+        >
+          ↓
+        </button>
+      )}
 
       <div className="p-3 sm:p-4 border-t border-white/10 bg-black/30 backdrop-blur-xl">
         {activeContext && Object.keys(activeContext).length > 0 && (
@@ -386,10 +464,25 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
           </div>
         )}
 
-        <div className="flex gap-2 items-center bg-white/10 border border-white/10 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-indigo-500 transition">
+        {!loading && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {QUICK_PROMPTS.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                onClick={() => sendMessage(prompt)}
+                className="rounded-full border border-cyan-400/25 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-100 hover:bg-cyan-500/20"
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex gap-2 items-center bg-white/10 border border-white/10 rounded-xl px-3 py-2 focus-within:ring-2 focus-within:ring-indigo-500 transition shadow-[0_0_25px_rgba(30,41,59,0.25)]">
           <input
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => setInput(e.target.value.slice(0, MAX_INPUT_CHARS))}
             placeholder="Ask something..."
             className="flex-1 min-w-0 bg-transparent outline-none text-sm sm:text-base text-white placeholder:text-zinc-400"
             onKeyDown={(e) => {
@@ -408,7 +501,20 @@ export default function Chat({ selectedChat, onOpenSidebar }: any) {
         </div>
 
         <div className="mt-2 flex items-center justify-between text-xs text-zinc-400">
-          <span>Session: {sessionId ? `${sessionId.slice(0, 8)}...` : "loading"}</span>
+          <span>
+              Session: {sessionId ? `${sessionId.slice(0, 8)}...` : "loading"} •{" "}
+              <span
+                className={
+                  input.length >= MAX_INPUT_CHARS * 0.95
+                    ? "text-red-400 font-medium"
+                    : input.length >= MAX_INPUT_CHARS * 0.8
+                      ? "text-yellow-400"
+                      : ""
+                }
+              >
+                {input.length}/{MAX_INPUT_CHARS}
+              </span>
+            </span>
           <button
             type="button"
             onClick={resetSessionContext}
