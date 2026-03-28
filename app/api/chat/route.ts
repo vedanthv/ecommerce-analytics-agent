@@ -107,13 +107,17 @@ function shouldForceSqlAnalytics(question: string) {
 
   const hasDomainIntent = /\border|orders|revenue|sales|customer|customers|payment|payments|delivery|shipments?\b/.test(q);
   const hasTimeSeriesIntent = /\btrend|trends|over time|timeline|month over month|week over week|year over year|monthly|weekly|daily|quarterly|yearly|by month|by week|by day|by quarter|by year\b/.test(q);
-  const hasAnalyticVerb = /\banaly[sz]e|analysis|show|summari[sz]e|breakdown|compare|group\b/.test(q);
+  const hasAnalyticVerb = /\banaly[sz]e|analysis|show|summari[sz]e|breakdown|compare|group|distribute\b/.test(q);
   const hasBroadStructuredIntent = /\banalytics?|summary|overview|breakdown|metrics?|kpis?|stats?|statistics|totals?\b/.test(q);
   const hasWholeDatasetScope = /\ball\b|\boverall\b|\bwhole\b|\bentire\b|\bfull\b|\bacross the db\b|\bacross the database\b/.test(q);
+  
+  // Demographic/segmentation queries
+  const hasDemographicIntent = /\bdemographic|segmentation?|segment|cohort|categorical|distribution|profiling?\b/.test(q);
 
   return hasDomainIntent && (
     (hasTimeSeriesIntent && hasAnalyticVerb) ||
-    (hasBroadStructuredIntent && hasWholeDatasetScope)
+    (hasBroadStructuredIntent && hasWholeDatasetScope) ||
+    (hasDemographicIntent && hasAnalyticVerb)
   );
 }
 
@@ -413,6 +417,12 @@ export async function POST(req: NextRequest) {
 
       timings.total_ms = Math.round(performance.now() - t0);
 
+      // Limit displayed rows to 10, but track total available
+      const totalRows = result.length;
+      const displayedRows = Math.min(10, result.length);
+      const tableDisplay = result.slice(0, 10);
+      const hasMoreRows = totalRows > 10;
+
       await logMlflowMetrics(mlflowRunId, {
         ...timings,
         route_sql: 1,
@@ -426,7 +436,10 @@ export async function POST(req: NextRequest) {
       return new Response(
         JSON.stringify({
           answer: summary,
-          table: result,
+          table: tableDisplay,
+          totalRows,
+          displayedRows,
+          hasMoreRows,
           followUps,
           mode: "SQL",
           reason: decisionReason,
