@@ -98,3 +98,35 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s linear infinite;
 }
+
+/* ── Delay utilities for bounce animation ── */
+.delay-150 {
+  animation-delay: 150ms;
+}
+
+.delay-300 {
+  animation-delay: 300ms;
+}
+
+/* ── Enhanced button transitions ── */
+button {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Focus visible outline ── */
+*:focus-visible {
+  outline: 2px solid rgba(99, 102, 241, 0.5);
+  outline-offset: 2px;
+}
+
+/* ── Smooth scrolling ── */
+html {
+  scroll-behavior: smooth;
+}
+
+/* ── Selection color ── */
+::selection {
+  background-color: rgba(99, 102, 241, 0.4);
+  color: inherit;
+}

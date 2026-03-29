@@ -1,281 +1,355 @@
 Conversation history:
 {{history}}
 
+## Context
+**Today's date**: {{today}}
+
 ## Task
-Classify the user question as SQL or RAG. If SQL, generate the query.
-Return PURE JSON ONLY (no markdown, no extra text).
+Classify ambiguous ecommerce queries as SQL or RAG. If SQL, generate the query.
+Return **pure JSON only** (no markdown).
+
+Most important: all filters must be case insensitive and remove all extra symbols like _ and spaces during filters
 
 ## Format
 ```json
 {
-  "route": "SQL" or "RAG",
+  "route": "SQL" or "RAG" or "BLOCKED",
   "confidence": 0.0-1.0,
-  "reasoning": "1-2 sentence classification reason",
-  "sql": "SELECT ... Spark SQL query if route=SQL, null otherwise"
+  "reasoning": "Why you chose this route",
+  "sql": "SELECT ... if SQL, null otherwise"
 }
 ```
 
-## Few-Shot Examples
+## SQL Route Examples
 
-### Example 1: Demographic Query → SQL (confidence 0.99)
-User: "Give me demographic analysis of all the orders"
+### Example 1: Customer Order Count → SQL
+User: "How many orders did customer CUST123 place?"
 ```json
 {
   "route": "SQL",
   "confidence": 0.99,
-  "reasoning": "Demographic analysis requires aggregation and segmentation of structured data. Must use SQL with GROUP BY.",
-  "sql": "SELECT region, payment_method, order_channel, COUNT(*) as order_count, SUM(order_amount) as total_amount, AVG(order_amount) as avg_amount FROM customer_suppport_agent.raw.orders GROUP BY region, payment_method, order_channel ORDER BY total_amount DESC"
+  "reasoning": "Customer-specific aggregation requires WHERE filtering by customer_id",
+  "sql": "SELECT COUNT(*) as order_count, SUM(order_amount) as total_spent FROM customer_suppport_agent.raw.orders WHERE customer_id = 'CUST123'"
 }
 ```
 
-### Example 2: Time-Series Query → SQL (confidence 0.99)
-User: "Show me order trends over the last 3 months"
+### Example 2: Date-Filtered Aggregation → SQL
+User: "Show me orders from the last 30 days"
 ```json
 {
   "route": "SQL",
   "confidence": 0.99,
-  "reasoning": "Time-series analysis requires time-based filtering and temporal aggregation. Must use SQL.",
-  "sql": "SELECT year, month, COUNT(*) as orders, SUM(order_amount) as revenue FROM customer_suppport_agent.raw.orders WHERE order_date >= date_sub(current_date(), 90) GROUP BY year, month ORDER BY year, month"
+  "reasoning": "Date range filtering with aggregation requires SQL",
+  "sql": "SELECT COUNT(*) as orders, SUM(order_amount) as revenue FROM customer_suppport_agent.raw.orders WHERE order_date >= date_sub(current_date(), 30)"
 }
 ```
 
-### Example 3: Unstructured Query → RAG (confidence 0.95)
-User: "Tell me about common customer complaints in orders"
+### Example 3: Geographic Breakdown → SQL
+User: "Revenue by region"
 ```json
 {
-  "route": "RAG",
-  "confidence": 0.95,
-  "reasoning": "Qualitative analysis of complaints requires semantic understanding. Best served by RAG retrieval.",
-  "sql": null
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Geographic aggregation requires GROUP BY region",
+  "sql": "SELECT region, SUM(order_amount) as total_revenue, COUNT(*) as order_count FROM customer_suppport_agent.raw.orders GROUP BY region ORDER BY total_revenue DESC"
 }
 ```
 
-### Example 4: Analytics Query → SQL (confidence 0.98)
-User: "Show me the distribution of payments by method"
+### Example 4: Ranking/Top N → SQL
+User: "Which users had the most clicks?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Ranking by count requires GROUP BY and ORDER BY DESC from user_activity table",
+  "sql": "SELECT customer_id, COUNT(*) as total_clicks FROM customer_suppport_agent.raw.user_activity_raw_intermediate WHERE LOWER(event_type) = 'click' GROUP BY customer_id ORDER BY total_clicks DESC LIMIT 10"
+}
+```
+
+### Example 5: Follow-up with Context → SQL
+User: "Show shipping details for those orders"
+(Previous result had order_ids in context)
 ```json
 {
   "route": "SQL",
   "confidence": 0.98,
-  "reasoning": "Distribution analysis is structured aggregation. Payment method is a column in orders table.",
-  "sql": "SELECT payment_method, COUNT(*) as count, ROUND(100.0 * COUNT(*) / SUM(COUNT(*)) OVER (), 2) as percentage FROM customer_suppport_agent.raw.orders GROUP BY payment_method ORDER BY count DESC"
+  "reasoning": "Follow-up on previous context. Reuse order IDs in WHERE clause",
+  "sql": "SELECT order_id, shipping_address, delivery_partner, order_status FROM customer_suppport_agent.raw.orders WHERE order_id IN ('ORD001', 'ORD002')"
+}
+```
+
+## RAG Route Examples
+
+### Example 6: Explanatory Question → RAG
+User: "Why are sales declining in Q2?"
+```json
+{
+  "route": "RAG",
+  "confidence": 0.95,
+  "reasoning": "Requires pattern analysis and contextual explanation beyond aggregation",
+  "sql": null
+}
+```
+
+### Example 7: Vague Query → RAG
+User: "Tell me about our orders"
+```json
+{
+  "route": "RAG",
+  "confidence": 0.85,
+  "reasoning": "Too vague for SQL; user can clarify after exploratory answer",
+  "sql": null
+}
+```
+
+## BLOCKED Route
+
+### Example 8: Out of Domain → BLOCKED
+User: "Who won the football match?"
+```json
+{
+  "route": "BLOCKED",
+  "confidence": 0.99,
+  "reasoning": "Unrelated to ecommerce data",
+  "sql": null
 }
 ```
 
 ---
 
-## Classification Decision Tree (Internal Reasoning)
+## Additional SQL Examples
 
-Ask yourself these questions in order:
+### Example 9: Product Performance → SQL
+User: "Which products had the highest sales?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.98,
+  "reasoning": "Ranking products by sales metric requires GROUP BY product_id and aggregation",
+  "sql": "SELECT product_id, COUNT(*) as order_count, SUM(order_amount) as total_sales FROM customer_suppport_agent.raw.orders GROUP BY product_id ORDER BY total_sales DESC LIMIT 10"
+}
+```
 
-**Q1: Is this asking for numbers, counts, aggregates, distribution, breakdown, or trends?**
-- YES → 80% likely SQL
-- Examples: "how many", "total", "top 10", "average", "demographic", "distribution"
-- NO → Go to Q2
+### Example 10: Payment Method Analysis → SQL
+User: "How many orders used credit card vs PayPal?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Comparing payment methods requires GROUP BY payment_method with COUNT aggregation",
+  "sql": "SELECT LOWER(payment_method) as method, COUNT(*) as order_count, SUM(order_amount) as total_amount FROM customer_suppport_agent.raw.orders GROUP BY LOWER(payment_method) ORDER BY order_count DESC"
+}
+```
 
-**Q2: Does it involve time-based filtering or analytics?**
-- YES → 95% likely SQL
-- Examples: "last month", "Q2", "this year", "weekly trend"
-- NO → Go to Q3
+### Example 11: Time-Series Trend → SQL
+User: "Show me monthly order trends"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Monthly aggregation requires GROUP BY month/year with time-based ordering",
+  "sql": "SELECT year, month, COUNT(*) as order_count, SUM(order_amount) as revenue FROM customer_suppport_agent.raw.orders GROUP BY year, month ORDER BY year, month DESC"
+}
+```
 
-**Q3: Is it asking for explanation, narrative, context, or "why"?**
-- YES → 90% likely RAG
-- Examples: "why are sales low", "explain this pattern", "what happened"
-- NO → Go to Q4
+### Example 12: Customer Cohort Analysis → SQL
+User: "How much revenue did each region generate last quarter?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Regional revenue analysis with implicit time filtering requires GROUP BY region and date filtering",
+  "sql": "SELECT region, COUNT(*) as orders, SUM(order_amount) as revenue FROM customer_suppport_agent.raw.orders WHERE order_date >= date_sub(current_date(), 90) GROUP BY region ORDER BY revenue DESC"
+}
+```
 
-**Q4: Is it a follow-up to a previous result?**
-- YES → 95% likely SQL (if previous was SQL)
-- Example: "what about THOSE orders" (with previous context)
-- NO → Go to Q5
+### Example 13: User Behavior → SQL
+User: "What's the average time users spend on our site?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.98,
+  "reasoning": "User activity metrics require aggregating time_on_page from user_activity table",
+  "sql": "SELECT AVG(time_on_page) as avg_time_seconds, COUNT(DISTINCT session_id) as total_sessions FROM customer_suppport_agent.raw.user_activity_raw_intermediate"
+}
+```
 
-**Q5: Out of domain check**
-- NOT in {orders, customers, payments, delivery, revenue, sales} → RAG (safe default)
-- IN domain but vague → RAG (safe default, user can clarify)
+### Example 14: Conversion Rate Analysis → SQL
+User: "What's our conversion rate by device type?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.98,
+  "reasoning": "Conversion rate by device requires grouping by device_type and calculating conversion percentage",
+  "sql": "SELECT LOWER(device_type) as device, COUNT(*) as total_events, SUM(CASE WHEN conversion = true THEN 1 ELSE 0 END) as conversions, ROUND(100.0 * SUM(CASE WHEN conversion = true THEN 1 ELSE 0 END) / COUNT(*), 2) as conversion_rate FROM customer_suppport_agent.raw.user_activity_raw_intermediate GROUP BY LOWER(device_type) ORDER BY conversion_rate DESC"
+}
+```
+
+### Example 15: Inventory/Status Check → SQL
+User: "How many orders are still pending?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Status filtering requires WHERE clause on order_status with COUNT aggregation",
+  "sql": "SELECT COUNT(*) as pending_orders, SUM(order_amount) as pending_revenue FROM customer_suppport_agent.raw.orders WHERE LOWER(order_status) = 'pending'"
+}
+```
+
+### Example 16: Multi-Dimensional Breakdown → SQL
+User: "Show me sales by region and payment method"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Multi-dimensional analysis requires GROUP BY multiple columns",
+  "sql": "SELECT region, LOWER(payment_method) as method, COUNT(*) as orders, SUM(order_amount) as revenue FROM customer_suppport_agent.raw.orders GROUP BY region, LOWER(payment_method) ORDER BY revenue DESC"
+}
+```
+
+### Example 17: Discount Impact → SQL
+User: "What percentage of orders used a discount?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.98,
+  "reasoning": "Discount adoption metric requires calculating percentage of orders with discount > 0",
+  "sql": "SELECT SUM(CASE WHEN discount > 0 THEN 1 ELSE 0 END) as discounted_orders, COUNT(*) as total_orders, ROUND(100.0 * SUM(CASE WHEN discount > 0 THEN 1 ELSE 0 END) / COUNT(*), 2) as discount_rate FROM customer_suppport_agent.raw.orders"
+}
+```
+
+### Example 18: Repeat Customer Analysis → SQL
+User: "Which customers placed more than one order?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.98,
+  "reasoning": "Repeat customer analysis requires GROUP BY customer_id with HAVING clause for count > 1",
+  "sql": "SELECT customer_id, COUNT(*) as order_count, SUM(order_amount) as total_spent FROM customer_suppport_agent.raw.orders GROUP BY customer_id HAVING COUNT(*) > 1 ORDER BY order_count DESC"
+}
+```
+
+### Example 19: Customer Geographic Breakdown → SQL
+User: "Which cities did this customer purchase products from?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Customer-specific geographic analysis requires filtering by customer_id from conversation context and grouping by city",
+  "sql": "SELECT city, COUNT(*) as order_count, SUM(order_amount) as total_spent FROM customer_suppport_agent.raw.orders WHERE customer_id IN ('CUST123', 'CUST456') GROUP BY city ORDER BY total_spent DESC"
+}
+```
+
+### Example 20: Customer Purchase History with Attributes → SQL
+User: "What products did customer CUST789 buy and from which regions?"
+```json
+{
+  "route": "SQL",
+  "confidence": 0.99,
+  "reasoning": "Customer-specific product and region breakdown requires multi-column grouping with customer filter",
+  "sql": "SELECT product_id, region, city, COUNT(*) as purchase_count, SUM(order_amount) as total_spent FROM customer_suppport_agent.raw.orders WHERE customer_id = 'CUST789' GROUP BY product_id, region, city ORDER BY total_spent DESC"
+}
+```
 
 ---
 
-## High-Confidence SQL Patterns (confidence >= 0.98)
+## Additional RAG Examples
 
-1. **Time-series**: "trend", "over time", "last X days/weeks/months", "by month/quarter/year"
-2. **Demographics**: "demographic", "breakdown", "distribution", "segment by", "cohort"
-3. **Aggregations**: COUNT/SUM/AVG/MAX phrases, "total", "how many", "what's the"
-4. **Ranking**: "top 10", "bottom 5", "highest", "lowest", "rank"
-5. **Comparisons**: "compare", "which", "versus"
-6. **Multi-dimensional**: "by region and device", "breakdown by X and Y"
+### Example 21: Anomaly Investigation → RAG
+User: "Why did we have a spike in orders on March 20?"
+```json
+{
+  "route": "RAG",
+  "confidence": 0.90,
+  "reasoning": "Requires contextual analysis of potential causes beyond SQL aggregation",
+  "sql": null
+}
+```
 
-## Low-Confidence Cases (should be RAG as safe default)
+### Example 22: Strategic Question → RAG
+User: "What's our best strategy to increase customer retention?"
+```json
+{
+  "route": "RAG",
+  "confidence": 0.95,
+  "reasoning": "Strategic advice requires business context and analysis beyond data lookup",
+  "sql": null
+}
+```
 
-1. Vague: "tell me about orders", "what's going on"
-2. Narrative: "why", "how", "what happened", "explain"
-3. Out of scope: "best practices", "general advice"
-4. Ambiguous: Could be SQL or RAG → default to RAG
+### Example 21: Ambiguous Comparative → RAG
+User: "How do our sales compare to last year?"
+```json
+{
+  "route": "RAG",
+  "confidence": 0.75,
+  "reasoning": "Ambiguous - could be SQL if asking for specific numbers, but phrasing suggests need for context/ranking. Default to RAG to clarify intent.",
+  "sql": null
+}
+```
+
+### Example 22: Vague Exploratory → RAG
+User: "Give me insights about my top customers"
+```json
+{
+  "route": "RAG",
+  "confidence": 0.80,
+  "reasoning": "Too open-ended; user could be asking for ranking, behavior analysis, or segmentation. Ambiguous phrasing - start with RAG narrative then offer SQL refinements",
+  "sql": null
+}
+```
 
 ---
 
-## Rule-Based Safety Nets
+## Decision Rules
 
-**Context Handling**: If conversation history shows previous SQL results (order_id, customer_id, product_id), and user asks:
-- "what about them", "show details", "break down those", "segment those"
-- → Boost confidence to 0.98+ and use SQL
-- Reuse the previous IDs in WHERE clause
+**SQL indicators**:
+- Numerical aggregations (count, sum, average)
+- Time-based filtering (last X days, by month, trends)
+- Specific entity lookups (customer X, product Y, order Z)
+- Ranking/top N queries
+- Follow-ups on prior context
 
-**Confidence Adjustment**:
-- Clear domain + clear intent → +0.05
-- With conversation context → +0.05
-- Ambiguous phrasing → -0.10
-- Multiple interpretations → -0.15
+**RAG indicators**:
+- Why/how/explain questions
+- Vague or open-ended queries
+- Pattern analysis or anomaly detection
+- General advice
+
+**BLOCKED indicators**:
+- Out of ecommerce domain
+- No connection to datasets
 
 ---
 
-## Schema Reference
-Tables: customer_suppport_agent.raw.orders, customer_suppport_agent.raw.user_activity_raw_intermediate
+## Key Schema
+**Tables**: `customer_suppport_agent.raw.orders` | `customer_suppport_agent.raw.user_activity_raw_intermediate`
 
-orders table columns (use ONLY these):
-order_id, customer_id, product_id, order_status, order_amount, currency, payment_method, payment_status, shipping_address, billing_address, order_date, delivery_date, discount, tax, shipping_cost, quantity, seller_id, warehouse_id, region, city, pincode, device_type, browser, ip_address, is_gift, gift_message, coupon_code, loyalty_points_used, order_channel, fulfillment_type, delivery_partner, status_timestamp, created_at, updated_at, year, month, day
+**orders columns**: order_id, customer_id, order_amount, order_date, region, city, payment_method, product_id, order_status, shipping_address, delivery_date, discount
 
-user_activity_raw_intermediate table columns
+**user_activity columns**: customer_id, event_type, event_id, conversion, session_id, device_type, browser, page_url, time_on_page
 
-ad_id
-app_version
-browser
-campaign_id
-click_x
-click_y
-conversion
-created_at
-customer_id
-device_id
-device_type
-error_code
-error_message
-event_id
-event_type
-experiment_id
-feature_flag
-ip_address
-lat
-load_time
-location
-lon
-network
-os
-page_url
-referrer
-screen_resolution
-scroll_depth
-session_id
-time_on_page
-user_id
+---
+
+## Context Usage
+**Previous Query Results**: The conversation history contains results from previous SQL queries. When a user asks a follow-up question about data from previous results, extract the actual IDs (customer_id, product_id, order_id, etc.) from that context and use them in WHERE clauses.
+
+**Example**: 
+- Previous query returned: customer_id = 'C123', product_id = 'P456'
+- User asks: "Which cities did this customer purchase from?"
+- Your SQL: `WHERE customer_id IN ('C123')` ← Use actual ID from context, NOT a subquery
 
 ---
 
 ## Hard Constraints
 
-1. **Today's date**: ${today}
-2. **Respond in pure JSON only** - no markdown, no explanation
-3. **Confidence >= 0.95** = High confidence, execute
-4. **Confidence < 0.85** = Low confidence → prefer RAG (user can clarify)
-5. **Valid Spark SQL only** - use current_date(), date_sub(), trunc()
-6. **No hallucinated columns** - only use columns listed above
-7. **Table name** = "customer_suppport_agent.raw.orders" (double 'p' in suppport)
+1. **Confidence >= 0.85** = Commit to route
+2. **Confidence < 0.70** = Prefer RAG
+3. **Table name** = "customer_suppport_agent.raw.orders" (double 'p')
+4. **Valid Spark SQL only**: current_date(), date_sub(), TRUNC()
+5. **No hallucinated columns**
+6. **Respond in JSON only**
 
 ---
 
-Now classify this user question:
-
-{{question}}
-user_id
-
----
-
-## FEW-SHOT EXAMPLES (CRITICAL FOR CORRECT BEHAVIOR)
-
-Example 1:
-User: Show top 5 customers by total order amount
-Output:
-SELECT customer_id, SUM(order_amount) AS total_amount
-FROM customer_suppport_agent.raw.orders
-GROUP BY customer_id
-ORDER BY total_amount DESC
-LIMIT 5
-
-Example 2 (Follow-up context):
-User: What products did they buy?
-Output:
-SELECT customer_id, product_id, SUM(quantity) AS total_quantity
-FROM customer_suppport_agent.raw.orders
-WHERE customer_id IN (<customer_ids_from_previous_result>)
-GROUP BY customer_id, product_id
-ORDER BY total_quantity DESC
-
-Example 3 (Time-based → MUST SQL):
-User: Show orders in last 7 days
-Output:
-SELECT *
-FROM customer_suppport_agent.raw.orders
-WHERE order_date >= date_sub(current_date(), 7)
-
-Example 4 (Aggregation + time):
-User: Revenue this month
-Output:
-SELECT SUM(order_amount) AS total_revenue
-FROM customer_suppport_agent.raw.orders
-WHERE year = year(current_date()) AND month = month(current_date())
-
-Example 5 (RAG case):
-User: Why are customers unhappy?
-Output:
-RAG
-
-Example 5b (Whole dataset analytics → MUST SQL):
-User: Give me concise analytics of all orders
-Output:
-SELECT
-  COUNT(*) AS total_orders,
-  SUM(order_amount) AS total_revenue,
-  AVG(order_amount) AS avg_order_amount,
-  SUM(quantity) AS total_items,
-  COUNT(DISTINCT customer_id) AS unique_customers
-FROM customer_suppport_agent.raw.orders
-
-Example 6 (User activity filter):
-User: Show number of clicks by device type
-Output:
-SELECT device_type, COUNT(*) AS total_clicks
-FROM customer_suppport_agent.raw.user_activity_raw_intermediate
-WHERE lower(event_type) = 'click'
-GROUP BY device_type
-
-Example 7 (Follow-up strict context):
-User: Show top 3 customers
-Output:
-SELECT customer_id, COUNT(*) AS total_orders
-FROM customer_suppport_agent.raw.orders
-GROUP BY customer_id
-ORDER BY total_orders DESC
-LIMIT 3
-
-User: Show their order details
-Output:
-SELECT *
-FROM customer_suppport_agent.raw.orders
-WHERE customer_id IN (<customer_ids_from_previous_result>)
-
----
-
-FINAL OUTPUT RULE:
-
-* If the query is structured, aggregation-based, filter-based, ranking-based, numeric, join-based, or time-based → RETURN ONLY SQL.
-
-* If the query is semantic, descriptive, explanatory, opinion-based, or cannot be answered strictly using the provided schema → RETURN EXACTLY: RAG
-
-* NEVER return both SQL and RAG
-
-* NEVER explain the answer
-
-* NEVER add comments
-
-* NEVER add markdown
-
-Return ONLY SQL or RAG. No explanations. No extra text.
-
-Question: {{question}}
+**Question**: {{question}}

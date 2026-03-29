@@ -129,29 +129,32 @@ export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: a
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-      <div className="mb-3">
+      <div className="mb-4 flex flex-col gap-3">
+        <h2 className="text-base font-bold text-white">Chat History</h2>
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search chats"
-          className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+          placeholder="Search chats…"
+          className="w-full rounded-lg border border-white/15 bg-white/10 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 transition text-white placeholder:text-zinc-400"
           aria-label="Search chats"
         />
       </div>
 
-      <div className="space-y-2 mb-4 pt-12 md:pt-0">
+      <div className="space-y-2 mb-4 pt-8 md:pt-0">
         <button
           onClick={newChat}
-          className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 py-2 rounded-xl text-sm sm:text-base font-medium hover:opacity-90 transition"
+          className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 py-2.5 rounded-lg text-sm font-semibold hover:shadow-lg hover:shadow-indigo-500/20 transition hover:-translate-y-0.5 duration-150"
+          aria-label="Start new chat"
         >
-          + New Chat
+          ➕ New Chat
         </button>
 
         <button
           onClick={clearHistory}
-          className="w-full bg-red-500/20 border border-red-500/30 text-red-300 py-2 rounded-xl text-sm sm:text-base hover:bg-red-500/30 transition"
+          className="w-full bg-red-500/15 border border-red-500/40 text-red-300 py-2 rounded-lg text-sm font-medium hover:bg-red-500/25 transition hover:border-red-500/60"
+          aria-label="Clear all chats"
         >
-          Clear History
+          🗑️ Clear History
         </button>
       </div>
 
@@ -181,10 +184,10 @@ export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: a
               )}
               <div
                 onClick={() => handleSelect(chat)}
-                className={`p-3 rounded-xl cursor-pointer transition text-sm sm:text-base border ${
+                className={`p-3 rounded-lg cursor-pointer transition duration-150 text-sm border group ${
                   activeChatId === chat.id
-                    ? "bg-white/15 border-indigo-400/40"
-                    : "border-transparent hover:bg-white/10"
+                    ? "bg-indigo-500/20 border-indigo-400/40 shadow-md shadow-indigo-500/10"
+                    : "border-white/10 hover:bg-white/10 hover:border-white/20"
                 }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -199,11 +202,11 @@ export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: a
                         if (e.key === "Escape") setRenamingId(null);
                       }}
                       onClick={(e) => e.stopPropagation()}
-                      className="flex-1 min-w-0 bg-transparent border-b border-indigo-400 outline-none text-sm text-white"
+                      className="flex-1 min-w-0 bg-white/10 border-b border-indigo-400 outline-none text-sm text-white px-2 py-1 rounded"
                     />
                   ) : (
                     <div
-                      className="truncate"
+                      className="truncate font-medium text-white group-hover:text-indigo-200 transition"
                       onDoubleClick={(e) => startRename(chat, e)}
                       title="Double-click to rename"
                     >
@@ -211,21 +214,21 @@ export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: a
                     </div>
                   )}
 
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0 opacity-70 hover:opacity-100 transition">
                     <button
                       type="button"
-                      className="rounded px-1 text-[11px] text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition"
+                      className="rounded px-2 py-1 text-xs text-zinc-400 hover:bg-white/10 hover:text-zinc-200 transition"
                       onClick={(e) => {
                         e.stopPropagation();
                         togglePin(chat.id);
                       }}
                       aria-label={chat.pinned ? "Unpin chat" : "Pin chat"}
                     >
-                      {chat.pinned ? "📌" : "Pin"}
+                      {chat.pinned ? "📌" : "📍"}
                     </button>
                     <button
                       type="button"
-                      className="rounded p-0.5 text-[11px] text-zinc-500 hover:text-red-300 hover:bg-red-500/10 transition"
+                      className="rounded px-1.5 py-1 text-xs text-zinc-500 hover:text-red-300 hover:bg-red-500/15 transition"
                       onClick={(e) => deleteChat(chat.id, e)}
                       aria-label="Delete chat"
                     >
@@ -233,7 +236,7 @@ export default function Sidebar({ onSelectChat, open, onClose, activeChatId }: a
                     </button>
                   </div>
                 </div>
-                <div className="mt-1 text-[11px] text-zinc-400">{formatTime(chat.updatedAt)}</div>
+                <div className="mt-2 text-[11px] text-zinc-500">{formatTime(chat.updatedAt)}</div>
               </div>
             </div>
           );

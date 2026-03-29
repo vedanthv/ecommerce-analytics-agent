@@ -1,4 +1,4 @@
-# Orders AI Agent
+# E Commerce Analytics AI Agent
 
 A full-stack analytics assistant for e-commerce support teams, built on Next.js. The app accepts natural-language questions and dynamically routes each request to either:
 

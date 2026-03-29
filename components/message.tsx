@@ -89,19 +89,20 @@ export default function Message({ content, role, table, mode, reason, onAction, 
         }`}
       >
         {role === "assistant" && (
-          <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px] sm:text-xs">
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] sm:text-xs">
             <span
-              className={`rounded-full px-2 py-0.5 font-semibold ${
+              className={`rounded-full px-3 py-1 font-semibold inline-flex items-center gap-1 ${
                 mode === "SQL"
-                  ? "bg-sky-500/20 text-sky-200 border border-sky-400/30"
+                  ? "bg-sky-500/20 text-sky-200 border border-sky-400/40 shadow-sm shadow-sky-500/20"
                   : mode === "RAG"
-                    ? "bg-amber-500/20 text-amber-200 border border-amber-400/30"
-                    : "bg-zinc-500/20 text-zinc-200 border border-zinc-400/30"
+                    ? "bg-amber-500/20 text-amber-200 border border-amber-400/40 shadow-sm shadow-amber-500/20"
+                    : "bg-zinc-500/20 text-zinc-200 border border-zinc-400/40"
               }`}
             >
+              <span>{mode === "SQL" ? "🔍" : mode === "RAG" ? "📚" : "⚙️"}</span>
               {mode || "ASSISTANT"}
             </span>
-            {reason && <span className="text-zinc-300">{reason}</span>}
+            {reason && <span className="text-zinc-400">{reason}</span>}
           </div>
         )}
 
@@ -119,35 +120,35 @@ export default function Message({ content, role, table, mode, reason, onAction, 
         )}
 
         {role === "assistant" && (
-          <div className="mt-3 space-y-2">
+          <div className="mt-4 pt-3 border-t border-white/10 space-y-3">
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                className="rounded-md border border-white/20 px-2 py-1 text-[11px] sm:text-xs hover:bg-white/10"
+                className="rounded-md border border-white/20 px-2.5 py-1.5 text-xs sm:text-sm hover:bg-white/10 transition hover:border-white/30 group flex items-center gap-1"
                 onClick={() => onAction?.("regenerate")}
               >
-                Regenerate
+                <span className="text-base">↻</span> Regenerate
               </button>
               <button
                 type="button"
-                className="rounded-md border border-white/20 px-2 py-1 text-[11px] sm:text-xs hover:bg-white/10"
+                className="rounded-md border border-white/20 px-2.5 py-1.5 text-xs sm:text-sm hover:bg-white/10 transition hover:border-white/30 group flex items-center gap-1"
                 onClick={() => onAction?.("explain")}
               >
-                Explain
+                <span className="text-base">💡</span> Explain
               </button>
               <button
                 type="button"
-                className="rounded-md border border-white/20 px-2 py-1 text-[11px] sm:text-xs hover:bg-white/10"
+                className="rounded-md border border-white/20 px-2.5 py-1.5 text-xs sm:text-sm hover:bg-white/10 transition hover:border-white/30 group flex items-center gap-1"
                 onClick={() => onAction?.("continue")}
               >
-                Continue
+                <span className="text-base">→</span> Continue
               </button>
               <button
                 type="button"
-                className="rounded-md border border-white/20 px-2 py-1 text-[11px] sm:text-xs hover:bg-white/10"
+                className="rounded-md border border-white/20 px-2.5 py-1.5 text-xs sm:text-sm hover:bg-white/10 transition hover:border-white/30 group flex items-center gap-1"
                 onClick={copyAssistantResponse}
               >
-                {copied ? "Copied" : "Copy"}
+                <span className="text-base">📋</span> {copied ? "Copied" : "Copy"}
               </button>
 
               {/* Feedback buttons */}
@@ -157,7 +158,7 @@ export default function Message({ content, role, table, mode, reason, onAction, 
                     type="button"
                     aria-label="Like"
                     onClick={() => handleRating("like")}
-                    className={`rounded-md border px-2 py-1 text-[11px] sm:text-xs transition ${
+                    className={`rounded-md border px-2.5 py-1.5 text-sm transition flex items-center gap-1 ${
                       feedback === "like"
                         ? "border-green-400/60 bg-green-500/20 text-green-300"
                         : "border-white/20 hover:bg-white/10"
@@ -169,7 +170,7 @@ export default function Message({ content, role, table, mode, reason, onAction, 
                     type="button"
                     aria-label="Dislike"
                     onClick={() => handleRating("dislike")}
-                    className={`rounded-md border px-2 py-1 text-[11px] sm:text-xs transition ${
+                    className={`rounded-md border px-2.5 py-1.5 text-sm transition flex items-center gap-1 ${
                       feedback === "dislike"
                         ? "border-red-400/60 bg-red-500/20 text-red-300"
                         : "border-white/20 hover:bg-white/10"
@@ -179,17 +180,17 @@ export default function Message({ content, role, table, mode, reason, onAction, 
                   </button>
                 </>
               ) : (
-                <span className="text-[11px] sm:text-xs text-zinc-400 self-center">Thanks for your feedback!</span>
+                <span className="text-xs sm:text-sm text-emerald-400 self-center font-medium">✓ Feedback recorded</span>
               )}
             </div>
 
             {/* Optional comment box */}
             {showCommentBox && !submitted && (
-              <div className="flex flex-col gap-2 mt-1">
+              <div className="flex flex-col gap-2 mt-2 pt-3 border-t border-white/10">
                 <textarea
                   value={comment}
                   onChange={(e) => setComment(e.target.value)}
-                  placeholder="Add a comment (optional)"
+                  placeholder="Add a comment (optional)…"
                   rows={2}
                   className="w-full rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-xs text-white placeholder:text-zinc-400 outline-none focus:ring-1 focus:ring-indigo-500 resize-none"
                 />
@@ -198,14 +199,14 @@ export default function Message({ content, role, table, mode, reason, onAction, 
                     type="button"
                     disabled={submitting}
                     onClick={() => submitFeedback()}
-                    className="rounded-md bg-indigo-500/80 hover:bg-indigo-500 px-3 py-1 text-xs font-medium disabled:opacity-50"
+                    className="rounded-md bg-indigo-500/80 hover:bg-indigo-500 px-3 py-1.5 text-xs font-medium disabled:opacity-50 transition"
                   >
                     {submitting ? "Submitting…" : "Submit"}
                   </button>
                   <button
                     type="button"
                     onClick={() => { setShowCommentBox(false); submitFeedback(); }}
-                    className="rounded-md border border-white/20 px-3 py-1 text-xs hover:bg-white/10"
+                    className="rounded-md border border-white/20 px-3 py-1.5 text-xs hover:bg-white/10 transition"
                   >
                     Skip
                   </button>
@@ -263,35 +264,37 @@ function Table({ data }: any) {
 
   return (
     <div>
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="rounded-full bg-white/10 px-2 py-0.5 text-[11px] text-zinc-300 border border-white/10">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <span className="rounded-full bg-indigo-500/20 px-3 py-1 text-xs font-semibold text-indigo-200 border border-indigo-400/30 shadow-sm shadow-indigo-500/10">
           {data.length} row{data.length !== 1 ? "s" : ""}
         </span>
         <button
           type="button"
           onClick={copyCSV}
-          className="rounded-md border border-white/20 px-2 py-1 text-[11px] sm:text-xs hover:bg-white/10"
+          className="rounded-md border border-white/20 px-2.5 py-1 text-xs hover:bg-white/10 transition"
         >
-          Copy CSV
+          📋 Copy CSV
         </button>
         <button
           type="button"
           onClick={downloadCSV}
-          className="rounded-md border border-white/20 px-2 py-1 text-[11px] sm:text-xs hover:bg-white/10"
+          className="rounded-md border border-white/20 px-2.5 py-1 text-xs hover:bg-white/10 transition"
         >
-          Download CSV
+          ⬇️ Download CSV
         </button>
       </div>
 
       <div className="sm:hidden space-y-2">
         {data.map((row: any, i: number) => (
-          <details key={i} className="rounded-lg border border-white/10 bg-white/5 p-2">
-            <summary className="cursor-pointer text-xs text-zinc-200">Row {i + 1}</summary>
-            <div className="mt-2 space-y-1">
+          <details key={i} className="rounded-lg border border-white/10 bg-white/5 p-3 cursor-pointer group hover:bg-white/10 transition">
+            <summary className="cursor-pointer text-xs font-semibold text-zinc-200 group-hover:text-white transition">
+              <span className="inline-block mr-2">▶</span>Row {i + 1}
+            </summary>
+            <div className="mt-3 space-y-2 pl-4 border-l border-white/10">
               {cols.map((c) => (
-                <div key={c} className="text-xs">
-                  <span className="text-zinc-400">{c}: </span>
-                  <span className="text-zinc-100 break-words">{String(row[c] ?? "")}</span>
+                <div key={c} className="text-xs flex justify-between">
+                  <span className="text-zinc-400 font-semibold">{c}</span>
+                  <span className="text-zinc-100 break-words text-right max-w-[200px]">{String(row[c] ?? "")}</span>
                 </div>
               ))}
             </div>
@@ -301,10 +304,10 @@ function Table({ data }: any) {
 
       <div className="hidden sm:block overflow-x-auto -mx-1 sm:mx-0">
         <table className="min-w-full text-xs sm:text-sm border border-white/10 rounded-lg overflow-hidden">
-          <thead className="bg-white/10 sticky top-0">
+          <thead className="bg-white/10 sticky top-0 border-b border-white/10">
             <tr>
               {cols.map((c) => (
-                <th key={c} className="px-2 sm:px-3 py-2 text-left whitespace-nowrap">
+                <th key={c} className="px-3 sm:px-4 py-3 text-left whitespace-nowrap font-semibold text-zinc-200">
                   {c}
                 </th>
               ))}
@@ -312,9 +315,9 @@ function Table({ data }: any) {
           </thead>
           <tbody>
             {data.map((row: any, i: number) => (
-              <tr key={i} className="hover:bg-white/5 transition">
+              <tr key={i} className="hover:bg-white/8 transition border-b border-white/5 last:border-0">
                 {cols.map((c) => (
-                  <td key={c} className="px-2 sm:px-3 py-2 align-top break-words whitespace-normal">
+                  <td key={c} className="px-3 sm:px-4 py-3 align-top break-words whitespace-normal text-zinc-100">
                     {row[c]}
                   </td>
                 ))}
